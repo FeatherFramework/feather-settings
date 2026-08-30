@@ -13,7 +13,10 @@ shared_scripts {
     'locale/*.lua'
 }
 
-client_script 'client/main.lua'
+client_scripts {
+    'client/providers.lua',
+    'client/main.lua'
+}
 
 dependencies {
     'feather-core',
