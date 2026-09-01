@@ -28,14 +28,37 @@ end)
 local function RemoveProviderElements(id)
     local elements = providerElements[id]
     if not elements then return end
+    if elements.control then elements.control:UnRegister() end
     if elements.choice then elements.choice:UnRegister() end
     if elements.label then elements.label:UnRegister() end
     providerElements[id] = nil
 end
 
 local function ReadProviderValue(provider)
-    local ok, value = pcall(provider.spec.getValue)
+    if provider.value ~= nil then return provider.value end
+    local ok, value
+    if type(provider.spec.getExport) == 'string' then
+        ok, value = pcall(function()
+            return exports[provider.owner][provider.spec.getExport]()
+        end)
+    else
+        ok, value = pcall(provider.spec.getValue)
+    end
     return ok and value or nil
+end
+
+local function WriteProviderValue(provider, value)
+    if type(provider.spec.setEvent) == 'string' then
+        local ok, failure = pcall(TriggerEvent, provider.spec.setEvent, value)
+        if ok then provider.value = value end
+        return ok, ok and true or failure
+    end
+    if type(provider.spec.setExport) == 'string' then
+        return pcall(function()
+            return exports[provider.owner][provider.spec.setExport](value)
+        end)
+    end
+    return pcall(provider.spec.setValue, value)
 end
 
 local function ProviderIsVisible(provider)
@@ -46,6 +69,68 @@ end
 
 local function RegisterProviderElements(id, provider)
     local spec = provider.spec
+    local controlType = spec.control or 'dropdown'
+
+    if controlType == 'slider' then
+        local slider
+        slider = mainPage:RegisterElement('slider', {
+            id=('settings-provider:%s:slider'):format(id),
+            label=spec.label,
+            start=tonumber(ReadProviderValue(provider)) or spec.min,
+            min=spec.min,
+            max=spec.max,
+            steps=spec.step,
+            slot='content',
+        }, function(data)
+            local current = SettingsProviders.choices[id]
+            if not current or current.owner ~= provider.owner then return end
+            local ok, accepted = WriteProviderValue(current, tonumber(data.value))
+            if not ok or accepted == false then
+                print(('[feather-settings] provider write rejected id=%s value=%s detail=%s')
+                    :format(tostring(id), tostring(data.value), tostring(accepted)))
+                return
+            end
+            if ok and accepted ~= false then slider:update({ value=ReadProviderValue(current) }) end
+        end)
+        providerElements[id] = { control=slider }
+        return
+    end
+
+    if controlType == 'arrows' then
+        local options, selected = {}, 0
+        local currentValue = ReadProviderValue(provider)
+        for index, option in ipairs(spec.options) do
+            options[#options + 1] = { display=option.label, value=option.value }
+            if option.value == currentValue then selected = index - 1 end
+        end
+        local arrows
+        arrows = mainPage:RegisterElement('arrows', {
+            id=('settings-provider:%s:arrows'):format(id),
+            label=spec.label,
+            options=options,
+            value=selected,
+            slot='content',
+        }, function(data)
+            local current = SettingsProviders.choices[id]
+            if not current or current.owner ~= provider.owner then return end
+            local selectedOption = type(data.value) == 'table' and data.value.value or data.value
+            local ok, accepted = WriteProviderValue(current, selectedOption)
+            if not ok or accepted == false then
+                print(('[feather-settings] provider write rejected id=%s value=%s detail=%s')
+                    :format(tostring(id), tostring(selectedOption), tostring(accepted)))
+                return
+            end
+            if ok and accepted ~= false then
+                local saved = ReadProviderValue(current)
+                for index, option in ipairs(current.spec.options) do
+                    if option.value == saved then arrows:update({ value=index - 1 }); break end
+                end
+            end
+        end)
+        providerElements[id] = { control=arrows }
+        return
+    end
+
     local options = {}
     for _, option in ipairs(spec.options) do
         options[#options + 1] = { text=option.label, value=option.value }
@@ -65,7 +150,7 @@ local function RegisterProviderElements(id, provider)
     }, function(data)
         local current = SettingsProviders.choices[id]
         if not current or current.owner ~= provider.owner then return end
-        local ok, accepted = pcall(current.spec.setValue, data.value)
+        local ok, accepted = WriteProviderValue(current, data.value)
         if ok and accepted ~= false then
             choice:update({ selectedValue=ReadProviderValue(current) })
         end
@@ -84,8 +169,12 @@ local function SyncProviderElements()
             if not providerElements[id] then
                 RegisterProviderElements(id, provider)
             else
-                providerElements[id].label:update({ value=provider.spec.label })
-                providerElements[id].choice:update({ selectedValue=ReadProviderValue(provider) })
+                if providerElements[id].label then
+                    providerElements[id].label:update({ value=provider.spec.label })
+                end
+                if providerElements[id].choice then
+                    providerElements[id].choice:update({ selectedValue=ReadProviderValue(provider) })
+                end
             end
         end
     end
