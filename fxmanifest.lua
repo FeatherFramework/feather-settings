@@ -6,7 +6,7 @@ lua54 'yes'
 name 'feather-settings'
 description 'Player settings presentation for Feather Framework'
 author 'Feather Framework'
-version '0.1.4'
+version '0.1.5'
 
 shared_scripts {
     'config.lua',

@@ -200,12 +200,26 @@ local function ToggleMenu()
     Require(Menu:OpenMenu(menuId, { pageId = mainPageId }), 'OpenMenu')
 end
 
+local function MenuInputCaptured()
+    if menuId then
+        local state = Menu:GetMenuState(menuId)
+        if type(state) == 'table' and state.ok and state.value.open then return false end
+    end
+    if GetResourceState('feather-menu-v2') ~= 'started' then return false end
+    local ok, captured = pcall(function()
+        return exports['feather-menu-v2']:IsInputCaptured()
+    end)
+    return ok and captured == true
+end
+
 CreateThread(function()
     InitializeMenu()
     while true do
         Wait(0)
         if Citizen.InvokeNative(0x580417101DDB492F, 0, Config.Hotkey)
-            or Citizen.InvokeNative(0x91AEF906BCA88877, 0, Config.Hotkey) then ToggleMenu() end
+            or Citizen.InvokeNative(0x91AEF906BCA88877, 0, Config.Hotkey) then
+            if not MenuInputCaptured() then ToggleMenu() end
+        end
     end
 end)
 AddEventHandler('onClientResourceStop', function(stopped)
