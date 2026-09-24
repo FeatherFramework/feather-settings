@@ -24,6 +24,13 @@ local function PvpState()
     local ok, state = pcall(function() return exports['feather-pvp']:GetState() end)
     return ok and type(state) == 'table' and state.enabled == true
 end
+local function CharacterActive()
+    if GetResourceState('feather-character') ~= 'started' then return false end
+    local ok, active = pcall(function()
+        return exports['feather-character']:HasActiveCharacter()
+    end)
+    return ok and active == true
+end
 local function CurrentLocale()
     local current = exports['feather-core']:CallRPCAsync('core.account.settings.get.v1', {})
     return type(current) == 'table' and current.ok and current.value.locale or Config.DefaultLocale
@@ -148,6 +155,19 @@ local function BuildMenu()
     elements.languageButton = Add(mainPageId, 'button', {
         key = 'language', label = LanguageLabel(CurrentLocale()), slot = 'content',
     }, function() Require(Menu:NavigateToPage(menuId, languagePageId), 'Navigate language') end)
+    Add(mainPageId, 'bottomline', { key = 'session-bottom-line', slot = 'footer' })
+    elements.logout = Add(mainPageId, 'button', {
+        key = 'logout', label = 'Logout to character selection', slot = 'footer', disabled = true,
+    }, function()
+        Require(Menu:CloseMenu(menuId), 'Close settings before logout')
+        ExecuteCommand('logout')
+    end)
+    elements.saveQuit = Add(mainPageId, 'button', {
+        key = 'save-quit', label = 'Save and Quit', slot = 'footer', disabled = true,
+    }, function()
+        Require(Menu:CloseMenu(menuId), 'Close settings before save and quit')
+        ExecuteCommand('savequit')
+    end)
     elements.languageHeader = Add(languagePageId, 'header', {
         key = 'title', value = Translate('ui_settings_locale_title'), slot = 'header',
     })
@@ -190,12 +210,17 @@ local function ToggleMenu()
     local state = Menu:GetMenuState(menuId)
     if type(state) == 'table' and state.ok and state.value.open then Require(Menu:CloseMenu(menuId), 'CloseMenu'); return end
     SyncProviderElements()
+    local characterActive = CharacterActive()
     Require(Menu:ApplyPatch(menuId, {
         { op = 'updateElement', pageId = elements.pvp.pageId, elementId = elements.pvp.elementId, changes = { value = PvpState() } },
         { op = 'updateElement', pageId = elements.header.pageId, elementId = elements.header.elementId,
             changes = { value = Translate('ui_settings_title') } },
         { op = 'updateElement', pageId = elements.languageButton.pageId, elementId = elements.languageButton.elementId,
             changes = { label = LanguageLabel(CurrentLocale()) } },
+        { op = 'updateElement', pageId = elements.logout.pageId, elementId = elements.logout.elementId,
+            changes = { disabled = not characterActive } },
+        { op = 'updateElement', pageId = elements.saveQuit.pageId, elementId = elements.saveQuit.elementId,
+            changes = { disabled = not characterActive } },
     }), 'Refresh settings values')
     Require(Menu:OpenMenu(menuId, { pageId = mainPageId }), 'OpenMenu')
 end
