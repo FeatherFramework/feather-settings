@@ -43,3 +43,47 @@ For the v2 migration live gate:
 4. change locale and confirm the translated title and language label update without the menu closing or flashing;
 5. restart `feather-menu-v2` while Settings remains loaded, wait for v2 readiness, and confirm PGUP opens one rebuilt Settings menu with no duplicate provider controls; and
 6. restart `feather-settings` and confirm providers return once without duplicates.
+
+## Next Settings UX pass
+
+Live review on 2026-09-29 confirmed that Chat's registered theme, density,
+timestamp, motion, text-scale, and idle-opacity controls render and apply
+correctly alongside Inventory controls. The current flat list becomes difficult
+to scan as more feature resources register preferences, and the footer session
+buttons can be mistaken for settings persistence controls.
+
+A live `feather-settings` restart on 2026-09-29 restored exactly one copy of
+each Chat control with its persisted value. Provider ordering changed across
+the restart, confirming that the future grouping/order contract must define a
+deterministic presentation order rather than relying on Lua table iteration or
+resource registration timing.
+
+The next Settings design pass should:
+
+- Add an explicit grouping contract for built-in and provider-owned controls.
+  A likely shape is a stable group key, localized group label, group order, and
+  control order. Provider registration order must not determine presentation.
+- Present coherent sections such as General, Chat, Inventory, and other feature
+  resources without making Settings own those feature values.
+- Keep session actions visually and semantically separate from preference
+  controls, ideally under a clearly labeled `Session` or `Character Session`
+  section.
+- State near the preference controls that changes apply immediately; there is
+  no settings-wide Save button.
+- Replace ambiguous footer labels with action-specific language. In particular,
+  `Save and Quit` invokes Character's `/savequit`, which saves the active
+  character position and disconnects the player; it does not save Settings.
+  A candidate label is `Save Character & Disconnect`.
+- Consider similarly clarifying `Logout to character selection` as
+  `Save Character & Return to Character Select`, subject to final space and
+  localization review.
+- Add short descriptions or confirmation treatment for destructive/session
+  navigation actions without adding confirmation friction to ordinary setting
+  changes.
+- Preserve keyboard navigation, focus visibility, responsive height, and
+  restart-safe dynamic provider reconciliation after grouping is introduced.
+
+Do not solve grouping by hard-coding Chat or Inventory IDs into Settings. The
+registration contract should remain framework-agnostic and owner-scoped so
+future resources can join a validated section without Settings taking ownership
+of their preferences.
