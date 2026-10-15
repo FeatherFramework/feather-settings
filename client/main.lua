@@ -2,6 +2,10 @@ local Menu = exports['feather-menu-v2']
 local menuId, mainPageId, languagePageId
 local elements, providerElements = {}, {}
 local initialized, rebuilding = false, false
+local layout = {}
+local groupElements = {}
+local epoch = 0
+local InitializeMenu
 
 local function IsCallable(value)
     if type(value) == 'function' then return true end
@@ -56,7 +60,7 @@ local function RemoveProviderElement(id)
     providerElements[id] = nil
 end
 local function ReadProviderValue(provider)
-    if provider.value ~= nil then return provider.value end
+    if provider.spec.setEvent then return provider.value end
     local ok, value
     if type(provider.spec.getExport) == 'string' then
         ok, value = pcall(function() return exports[provider.owner][provider.spec.getExport]() end)
@@ -91,21 +95,33 @@ local function RegisterProviderElement(id, provider)
     local initial = ReadProviderValue(provider)
     local elementSpec = { key = 'provider-' .. id, label = spec.label, value = initial, slot = 'content', persist = false }
     if controlType == 'slider' then
-        elementSpec.value = tonumber(initial) or spec.min
+        elementSpec.value = type(initial) == 'number' and initial or spec.min
         elementSpec.min, elementSpec.max, elementSpec.step = spec.min, spec.max, spec.step
     else
         elementSpec.options = ProviderOptions(spec)
         if elementSpec.value == nil and elementSpec.options[1] then elementSpec.value = elementSpec.options[1].value end
         if controlType == 'dropdown' then elementSpec.maxVisibleOptions = math.min(10, math.max(3, spec.maxVisibleOptions or 6)) end
     end
+    elementSpec.disabled = spec.disabled == true
     local reference
+    local generation = epoch
     reference = Add(mainPageId, controlType, elementSpec, function(event)
         local current = SettingsProviders.choices[id]
-        if not current or current.owner ~= provider.owner then return end
+        if current ~= provider or generation ~= epoch or providerElements[id] ~= reference then return end
         local value = controlType == 'slider' and tonumber(event.value) or event.value
+        current.writeRevision = (current.writeRevision or 0) + 1
+        local writeRevision = current.writeRevision
+        local previous = ReadProviderValue(current)
+        if SettingsProviders.choices[id] ~= current or current.writeRevision ~= writeRevision or generation ~= epoch then return end
+        if not SettingsProviders.ValidValue(current.spec, value) then
+            UpdateElement(reference, { value = previous }, 'Restore invalid provider value')
+            return
+        end
         local ok, accepted = WriteProviderValue(current, value)
+        if SettingsProviders.choices[id] ~= current or current.writeRevision ~= writeRevision or generation ~= epoch or providerElements[id] ~= reference then return end
         if not ok or accepted == false then
             print(('[feather-settings] provider write rejected id=%s value=%s detail=%s'):format(tostring(id), tostring(value), tostring(accepted)))
+            UpdateElement(reference, { value = ReadProviderValue(current) or previous }, 'Restore rejected provider value')
             return
         end
         UpdateElement(reference, { value = ReadProviderValue(current) }, 'Update provider value')
@@ -113,19 +129,46 @@ local function RegisterProviderElement(id, provider)
     providerElements[id] = reference
 end
 local function SyncProviderElements()
-    for id in pairs(providerElements) do
-        local provider = SettingsProviders.choices[id]
-        if not provider or not ProviderIsVisible(provider) then RemoveProviderElement(id) end
+    local groups = SettingsProviders.Groups(ProviderIsVisible)
+    local nextLayout = {}
+    for _, group in ipairs(groups) do
+        nextLayout[#nextLayout + 1] = group.key .. ':' .. group.label
+        for _, choice in ipairs(group.choices) do nextLayout[#nextLayout + 1] = choice.provider end
     end
-    for id, provider in pairs(SettingsProviders.choices) do
-        if ProviderIsVisible(provider) then
-            if not providerElements[id] then RegisterProviderElement(id, provider)
-            else UpdateElement(providerElements[id], { label = provider.spec.label, value = ReadProviderValue(provider) }, 'Sync provider') end
+    local changed = #layout ~= #nextLayout
+    for i, value in ipairs(nextLayout) do if layout[i] ~= value then changed = true end end
+    if changed then
+        -- Contract 1 has no insertion/move operation. Replace provider content only.
+        for id in pairs(providerElements) do RemoveProviderElement(id) end
+        for _, reference in ipairs(groupElements) do
+            Require(Menu:RemoveElement(menuId, reference.pageId, reference.elementId), 'Remove provider heading')
+        end
+        groupElements = {}
+        for i, group in ipairs(groups) do
+            groupElements[#groupElements + 1] = Add(mainPageId, 'subheader', {
+                key = 'provider-group-' .. i, value = group.label,
+            })
+            for _, choice in ipairs(group.choices) do RegisterProviderElement(choice.id, choice.provider) end
+        end
+        layout = nextLayout
+    else
+        for id, reference in pairs(providerElements) do
+            UpdateElement(reference, { value = ReadProviderValue(SettingsProviders.choices[id]) }, 'Sync provider')
         end
     end
 end
 
 local function UpdateTranslatedLabels(locale)
+    local labels = {
+        general = { 'value', 'ui_settings_general' }, guidance = { 'value', 'ui_settings_guidance' },
+        session = { 'value', 'ui_settings_session' }, sessionHelp = { 'value', 'ui_settings_session_help' },
+        logout = { 'label', 'ui_settings_logout' }, saveQuit = { 'label', 'ui_settings_disconnect' },
+        back = { 'label', 'ui_settings_back' },
+    }
+    for name, definition in pairs(labels) do
+        UpdateElement(elements[name], { [definition[1]] = Translate(definition[2]) })
+    end
+    UpdateElement(elements.pvp, { onLabel = Translate('ui_settings_enabled'), offLabel = Translate('ui_settings_disabled') })
     Require(Menu:ApplyPatch(menuId, {
         { op = 'updateElement', pageId = elements.header.pageId, elementId = elements.header.elementId,
             changes = { value = Translate('ui_settings_title') } },
@@ -136,7 +179,8 @@ local function UpdateTranslatedLabels(locale)
     }), 'Apply translated labels')
 end
 local function BuildMenu()
-    elements, providerElements = {}, {}
+    epoch = epoch + 1
+    elements, providerElements, groupElements, layout = {}, {}, {}, {}
     menuId = Require(Menu:CreateMenu({
         key = 'main', draggable = true, closable = true, resizable = false, persistPosition = true,
         size = { width = '28rem', maxWidth = '90vw', maxHeight = '85vh', breakpoints = {
@@ -146,8 +190,10 @@ local function BuildMenu()
     mainPageId = Require(Menu:CreatePage(menuId, { key = 'main' }), 'CreatePage main').pageId
     languagePageId = Require(Menu:CreatePage(menuId, { key = 'language' }), 'CreatePage language').pageId
     elements.header = Add(mainPageId, 'header', { key = 'title', value = Translate('ui_settings_title'), slot = 'header' })
+    elements.general = Add(mainPageId, 'subheader', { key = 'general', value = Translate('ui_settings_general') })
+    elements.guidance = Add(mainPageId, 'textdisplay', { key = 'guidance', value = Translate('ui_settings_guidance') })
     elements.pvp = Add(mainPageId, 'toggle', {
-        key = 'pvp', label = 'PVP', value = PvpState(), onLabel = 'Enabled', offLabel = 'Disabled', persist = false,
+        key = 'pvp', label = 'PVP', value = PvpState(), onLabel = Translate('ui_settings_enabled'), offLabel = Translate('ui_settings_disabled'), persist = false,
     }, function()
         local ok, enabled = pcall(function() return exports['feather-pvp']:Toggle() end)
         if ok then UpdateElement(elements.pvp, { value = enabled }, 'Update PVP') end
@@ -156,22 +202,30 @@ local function BuildMenu()
         key = 'language', label = LanguageLabel(CurrentLocale()), slot = 'content',
     }, function() Require(Menu:NavigateToPage(menuId, languagePageId), 'Navigate language') end)
     Add(mainPageId, 'bottomline', { key = 'session-bottom-line', slot = 'footer' })
+    elements.session = Add(mainPageId, 'subheader', { key = 'session', value = Translate('ui_settings_session'), slot = 'footer' })
+    elements.sessionHelp = Add(mainPageId, 'textdisplay', { key = 'session-help', value = Translate('ui_settings_session_help'), slot = 'footer' })
     elements.logout = Add(mainPageId, 'button', {
-        key = 'logout', label = 'Logout to character selection', slot = 'footer', disabled = true,
+        key = 'logout', label = Translate('ui_settings_logout'), slot = 'footer', disabled = true,
     }, function()
+        if not CharacterActive() then return end
         Require(Menu:CloseMenu(menuId), 'Close settings before logout')
         ExecuteCommand('logout')
     end)
     elements.saveQuit = Add(mainPageId, 'button', {
-        key = 'save-quit', label = 'Save and Quit', slot = 'footer', disabled = true,
+        key = 'save-quit', label = Translate('ui_settings_disconnect'), slot = 'footer', disabled = true,
     }, function()
+        if not CharacterActive() then return end
         Require(Menu:CloseMenu(menuId), 'Close settings before save and quit')
         ExecuteCommand('savequit')
     end)
     elements.languageHeader = Add(languagePageId, 'header', {
         key = 'title', value = Translate('ui_settings_locale_title'), slot = 'header',
     })
-    for code, label in pairs(Config.Languages) do
+    local codes = {}
+    for code in pairs(Config.Languages) do codes[#codes + 1] = code end
+    table.sort(codes)
+    for _, code in ipairs(codes) do
+        local label = Config.Languages[code]
         Add(languagePageId, 'button', { key = 'locale-' .. code, label = label }, function()
             local updated = exports['feather-core']:CallRPCAsync('core.account.settings.update.v1', { locale = code })
             if type(updated) == 'table' and updated.ok then
@@ -182,34 +236,46 @@ local function BuildMenu()
         end)
     end
     Add(languagePageId, 'bottomline', { key = 'bottom-line', slot = 'footer' })
-    Add(languagePageId, 'button', { key = 'back', label = 'Back', slot = 'footer' }, function()
+    elements.back = Add(languagePageId, 'button', { key = 'back', label = Translate('ui_settings_back'), slot = 'footer' }, function()
         Require(Menu:NavigateToPage(menuId, mainPageId), 'Navigate main')
     end)
     initialized = true
 end
 
-local function InitializeMenu()
+InitializeMenu = function()
     if initialized or rebuilding then return end
     rebuilding = true
+    local requestEpoch = epoch
     local ok, problem = pcall(function()
-        Require(Menu:AwaitReady(10000), 'AwaitReady')
+        local ready
+        for attempt = 1, 3 do
+            ready = Menu:AwaitReady(3000)
+            if type(ready) == 'table' and ready.ok then break end
+            if attempt < 3 then Wait(500) end
+        end
+        if epoch ~= requestEpoch then return end
+        Require(ready, 'AwaitReady after 3 attempts; PGUP retries')
         BuildMenu()
     end)
+    if epoch ~= requestEpoch and not initialized then return end
     rebuilding = false
-    if not ok then print(('[feather-settings] menu initialization failed: %s'):format(tostring(problem))) end
+    if not ok then
+        if menuId then pcall(function() Menu:DestroyMenu(menuId) end) end
+        initialized, menuId = false, nil
+        print(('[feather-settings] menu initialization failed: %s'):format(tostring(problem)))
+    end
 end
 
-SettingsProviders.onChanged = function(id)
-    if not initialized then return end
-    RemoveProviderElement(id)
-    local provider = SettingsProviders.choices[id]
-    if provider and ProviderIsVisible(provider) then RegisterProviderElement(id, provider) end
+SettingsProviders.onChanged = function()
+    if initialized then SyncProviderElements() end
 end
 local function ToggleMenu()
+    if not initialized then InitializeMenu() end
     if not initialized then return end
     local state = Menu:GetMenuState(menuId)
     if type(state) == 'table' and state.ok and state.value.open then Require(Menu:CloseMenu(menuId), 'CloseMenu'); return end
     SyncProviderElements()
+    UpdateTranslatedLabels(CurrentLocale())
     local characterActive = CharacterActive()
     Require(Menu:ApplyPatch(menuId, {
         { op = 'updateElement', pageId = elements.pvp.pageId, elementId = elements.pvp.elementId, changes = { value = PvpState() } },
@@ -248,7 +314,9 @@ CreateThread(function()
     end
 end)
 AddEventHandler('onClientResourceStop', function(stopped)
-    if stopped ~= 'feather-menu-v2' then return end
+    if stopped ~= 'feather-menu-v2' and stopped ~= GetCurrentResourceName() then return end
+    epoch = epoch + 1
+    if stopped == GetCurrentResourceName() and menuId then pcall(function() Menu:DestroyMenu(menuId) end) end
     initialized, rebuilding = false, false
     menuId, mainPageId, languagePageId = nil, nil, nil
     elements, providerElements = {}, {}
@@ -268,3 +336,7 @@ RegisterCommand('SettingsClientSmokeTest', function()
     print(('[SettingsClientSmokeTest] account settings route  %s'):format(type(settings) == 'table' and settings.ok and 'PASS' or 'FAIL'))
     print(('[SettingsClientSmokeTest] menu v2 contract         %s'):format(type(menu) == 'table' and menu.ok and 'PASS' or 'FAIL'))
 end, false)
+
+AddEventHandler('feather-core:locale:changed', function()
+    if initialized then UpdateTranslatedLabels(CurrentLocale()) end
+end)

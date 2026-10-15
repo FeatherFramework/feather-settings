@@ -33,57 +33,49 @@ Supported controls are `dropdown`, `arrows`, and `slider`. Sliders use numeric
 `min`, `max`, and `step` fields; arrows use the same bounded option documents as
 dropdowns.
 
-Test in F8 with `SettingsClientSmokeTest`, then open the menu with PGUP and verify PVP and language changes. Locale labels update reactively through `ApplyPatch`; the menu is not closed, rebuilt, or reopened to refresh translated Lua strings.
+## Grouping and ordering
 
-For the v2 migration live gate:
+Registrations and removal still return booleans. Existing registrations need no
+migration: omitted group metadata places controls under the owner resource name.
+Optional metadata:
 
-1. start Legacy `feather-menu`, `feather-menu-v2`, and `feather-settings` together;
-2. run `SettingsClientSmokeTest` and require all three rows to pass;
-3. open Settings with PGUP, toggle PVP, and exercise any registered dropdown/arrows/slider providers;
-4. change locale and confirm the translated title and language label update without the menu closing or flashing;
-5. restart `feather-menu-v2` while Settings remains loaded, wait for v2 readiness, and confirm PGUP opens one rebuilt Settings menu with no duplicate provider controls; and
-6. restart `feather-settings` and confirm providers return once without duplicates.
+```lua
+group = { key = 'display', label = 'Display', order = 10 },
+order = 20,
+```
 
-## Next Settings UX pass
+Group keys accept 1–64 identifier bytes (letters, digits, underscore, dot, colon,
+hyphen); labels accept 1–100 bytes. Orders are finite integers from -1000 to 1000,
+defaulting to zero. Groups belong to their actual registered owner; identical keys
+from different owners remain separate. Groups sort by order then owner/key;
+controls sort by order then choice ID. The lowest current choice ID supplies
+conflicting group label/order metadata. General appears first and Session last.
+Provider labels remain owner-supplied; re-register to change translations.
+Registration copies presentation metadata/options, so later caller mutations do
+not change the registered control. Malformed supplied metadata is rejected.
 
-Live review on 2026-09-29 confirmed that Chat's registered theme, density,
-timestamp, motion, text-scale, and idle-opacity controls render and apply
-correctly alongside Inventory controls. The current flat list becomes difficult
-to scan as more feature resources register preferences, and the footer session
-buttons can be mistaken for settings persistence controls.
+Settings validates option membership, disabled controls/options, and finite slider
+range/step alignment before dispatch. Providers must still validate and authorize
+writes themselves. Callback/export rejection (`false` or a thrown error) refreshes
+the displayed owner value. Event success means dispatch only; it cannot establish
+acceptance or persistence. No acknowledgement protocol is required.
 
-A live `feather-settings` restart on 2026-09-29 restored exactly one copy of
-each Chat control with its persisted value. Provider ordering changed across
-the restart, confirming that the future grouping/order contract must define a
-deterministic presentation order rather than relying on Lua table iteration or
-resource registration timing.
+Preferences apply immediately; each owner controls persistence. Session actions
+invoke the existing Character `logout` and `savequit` commands. Core owns account
+locale and PVP owns its preference.
 
-The next Settings design pass should:
+Menu initialization tries readiness three times (3 seconds per attempt, 500ms
+between attempts), then logs failure. PGUP retries a bounded initialization cycle.
+Menu v2 start recreates at most one menu while initialization is in progress.
+Settings stop destroys its menu. Regular refreshes preserve element identities;
+layout or registration changes replace provider content only because Menu v2 has
+no insert/move operation. Built-ins and the open menu are retained. Keyboard focus
+and scroll after provider replacement still require live validation.
 
-- Add an explicit grouping contract for built-in and provider-owned controls.
-  A likely shape is a stable group key, localized group label, group order, and
-  control order. Provider registration order must not determine presentation.
-- Present coherent sections such as General, Chat, Inventory, and other feature
-  resources without making Settings own those feature values.
-- Keep session actions visually and semantically separate from preference
-  controls, ideally under a clearly labeled `Session` or `Character Session`
-  section.
-- State near the preference controls that changes apply immediately; there is
-  no settings-wide Save button.
-- Replace ambiguous footer labels with action-specific language. In particular,
-  `Save and Quit` invokes Character's `/savequit`, which saves the active
-  character position and disconnects the player; it does not save Settings.
-  A candidate label is `Save Character & Disconnect`.
-- Consider similarly clarifying `Logout to character selection` as
-  `Save Character & Return to Character Select`, subject to final space and
-  localization review.
-- Add short descriptions or confirmation treatment for destructive/session
-  navigation actions without adding confirmation friction to ordinary setting
-  changes.
-- Preserve keyboard navigation, focus visibility, responsive height, and
-  restart-safe dynamic provider reconciliation after grouping is introduced.
+## Validation
 
-Do not solve grouping by hard-coding Chat or Inventory IDs into Settings. The
-registration contract should remain framework-agnostic and owner-scoped so
-future resources can join a validated section without Settings taking ownership
-of their preferences.
+Run `lua5.4 tests/behavior.lua` from this resource root. CI also syntax-checks Lua.
+`SettingsClientSmokeTest` checks live dependency contracts in F8.
+Current evidence and coordinated live acceptance are maintained in
+[Settings delivery evidence](../feather-framework-docs/feather-settings/SCOPED_DELIVERY_EVIDENCE.md).
+Do not restart shared dependencies without coordinating with their owners.
