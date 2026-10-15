@@ -4,10 +4,26 @@ local owner = 'owner'
 local function result(value) return { ok = true, value = value or {} } end
 local menu = { elements = {}, creates = 0, ready = true, attempts = 0 }
 local serial = 0
+menu.pages = {}
 function menu:AwaitReady() self.attempts = self.attempts + 1; return { ok = self.ready } end
 function menu:CreateMenu() self.creates = self.creates + 1; return result({ menuId = 'menu' }) end
-function menu:CreatePage(_, spec) return result({ pageId = spec.key }) end
+function menu:CreatePage(_, spec)
+    assert(not self.pages[spec.key], 'duplicate page')
+    self.pages[spec.key] = true
+    return result({ pageId = spec.key })
+end
+function menu:DestroyPage(_, page, fallback)
+    assert(self.pages[page]); self.pages[page] = nil
+    if self.activePageId == page then assert(self.pages[fallback]); self.activePageId = fallback end
+    for id,e in pairs(self.elements) do if e.page == page then self.elements[id] = nil end end
+    return result()
+end
+function menu:FocusElement(_, page, id)
+    assert(self.activePageId == page and self.elements[id]); self.focused = id; return result()
+end
 function menu:AddElement(_, page, kind, spec, callback)
+    assert(self.pages[page])
+    for _,e in pairs(self.elements) do assert(e.page ~= page or e.spec.key ~= spec.key, "duplicate element key") end
     serial = serial + 1
     self.elements[serial] = { page = page, kind = kind, spec = spec, callback = callback }
     return result({ elementId = serial })
@@ -22,11 +38,11 @@ function menu:ApplyPatch(_, operations)
     for _,op in ipairs(operations) do self:UpdateElement(nil,op.pageId,op.elementId,op.changes) end
     return result()
 end
-function menu:DestroyMenu() self.elements = {}; return result() end
-function menu:GetMenuState() return result({ open = false }) end
+function menu:DestroyMenu() self.elements = {}; self.pages = {}; return result() end
+function menu:GetMenuState() return result({ open = self.open == true, activePageId = self.activePageId }) end
 function menu:OpenMenu() return result() end
 function menu:CloseMenu() return result() end
-function menu:NavigateToPage() return result() end
+function menu:NavigateToPage(_, page) assert(self.pages[page]); self.activePageId = page; return result() end
 function menu:IsInputCaptured() return false end
 exports = setmetatable({
     ['feather-menu-v2'] = menu,
@@ -102,6 +118,26 @@ local function element(key)
     for _,e in pairs(menu.elements) do if e.spec.key == key then return e end end
     error('missing element '..key)
 end
+local function button(label)
+    for _,e in pairs(menu.elements) do
+        if e.page == 'main' and e.kind == 'button' and e.spec.label == label then return e end
+    end
+    error('missing group button '..label)
+end
+menu.open = true
+local groupButton = button('A')
+groupButton.callback()
+local groupPage = menu.activePageId
+assert(groupPage ~= 'main' and element('provider-z').page == groupPage)
+for _,e in pairs(menu.elements) do
+    if e.page == groupPage and e.spec.key == 'back' then e.callback() end
+end
+assert(menu.activePageId == 'main' and menu.elements[menu.focused] == groupButton)
+menu.open = false
+-- Value refresh preserves group pages and controls.
+local stable = element('provider-z')
+assert(coroutine.resume(threads[1]))
+assert(element('provider-z') == stable)
 local old = element('provider-z')
 assert(api.RegisterChoice(spec('z')))
 old.callback({value='a'}) -- replaced instance must be inert
@@ -128,7 +164,7 @@ assert(api.RegisterChoice(spec('delayed')))
 assert(coroutine.resume(pending))
 local creates=menu.creates
 emit('feather-core:locale:changed'); assert(menu.creates == creates)
-emit('onClientResourceStop','feather-menu-v2'); menu.elements={}
+emit('onClientResourceStop','feather-menu-v2'); menu.elements={}; menu.pages={}
 menu.ready=false; emit('onClientResourceStart','feather-menu-v2')
 local recovery=threads[#threads]; assert(coroutine.resume(recovery))
 for _=1,3 do assert(coroutine.resume(recovery)) end
@@ -140,7 +176,29 @@ assert(coroutine.resume(threads[1]))
 local count=0
 for _,e in pairs(menu.elements) do if e.spec.key == 'provider-z' then count=count+1 end end
 assert(count == 1)
+-- Large control sets add one main button, not one row per control.
+owner='bulk'
+for i=1,40 do assert(api.RegisterChoice(spec('bulk-'..i))) end
+local bulkButton=button('bulk'); bulkButton.callback()
+local bulkPage=menu.activePageId
+local controls=0
+for _,e in pairs(menu.elements) do
+    if e.page == bulkPage and e.spec.key:match('^provider%-bulk') then controls=controls+1 end
+    assert(e.page ~= 'main' or not e.spec.key:match('^provider%-'))
+end
+assert(controls == 40)
+local staleButton=bulkButton
+emit('onClientResourceStop','bulk')
+assert(menu.activePageId == 'main' and not menu.pages[bulkPage])
+staleButton.callback(); assert(menu.activePageId == 'main')
+owner='owner'
+-- Moving a choice to an existing group must not leave an orphan/duplicate.
+local moved=spec('z'); moved.group={key='g',label='A',order=-1}
+assert(api.RegisterChoice(moved))
+local copies=0
+for _,e in pairs(menu.elements) do if e.spec.key == 'provider-z' then copies=copies+1 end end
+assert(copies == 1)
 local stale=element('provider-z'); emit('onClientResourceStop','owner'); stale.callback({value='a'})
 assert(SettingsProviders.choices.z == nil)
 emit('onClientResourceStop','feather-settings'); assert(next(menu.elements) == nil)
-print('PASS: provider normalization, grouping, validation, rejection, stale callbacks, locale and bounded recovery')
+print('PASS: submenu navigation, scale, active-group removal, group moves; provider normalization, grouping, validation, rejection, stale callbacks, locale and bounded recovery')

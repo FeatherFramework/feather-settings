@@ -4,6 +4,8 @@ local elements, providerElements = {}, {}
 local initialized, rebuilding = false, false
 local layout = {}
 local groupElements = {}
+local groupPages = {}
+local nextGroupId = 0
 local epoch = 0
 local InitializeMenu
 
@@ -90,7 +92,7 @@ local function ProviderOptions(spec)
     end
     return options
 end
-local function RegisterProviderElement(id, provider)
+local function RegisterProviderElement(id, provider, pageId)
     local spec, controlType = provider.spec, provider.spec.control or 'dropdown'
     local initial = ReadProviderValue(provider)
     local elementSpec = { key = 'provider-' .. id, label = spec.label, value = initial, slot = 'content', persist = false }
@@ -105,7 +107,7 @@ local function RegisterProviderElement(id, provider)
     elementSpec.disabled = spec.disabled == true
     local reference
     local generation = epoch
-    reference = Add(mainPageId, controlType, elementSpec, function(event)
+    reference = Add(pageId, controlType, elementSpec, function(event)
         local current = SettingsProviders.choices[id]
         if current ~= provider or generation ~= epoch or providerElements[id] ~= reference then return end
         local value = controlType == 'slider' and tonumber(event.value) or event.value
@@ -128,33 +130,98 @@ local function RegisterProviderElement(id, provider)
     end)
     providerElements[id] = reference
 end
+local function FocusMainButton(group)
+    local state = Menu:GetMenuState(menuId)
+    if group.button and type(state) == 'table' and state.ok and state.value.open
+        and state.value.activePageId == mainPageId then
+        Require(Menu:FocusElement(menuId, mainPageId, group.button.elementId), 'Focus provider group')
+    end
+end
 local function SyncProviderElements()
     local groups = SettingsProviders.Groups(ProviderIsVisible)
-    local nextLayout = {}
+    local present, nextLayout = {}, {}
     for _, group in ipairs(groups) do
-        nextLayout[#nextLayout + 1] = group.key .. ':' .. group.label
-        for _, choice in ipairs(group.choices) do nextLayout[#nextLayout + 1] = choice.provider end
+        present[group.key] = true
+        nextLayout[#nextLayout + 1] = group.key
+    end
+    for key, page in pairs(groupPages) do
+        if not present[key] then
+            -- DestroyPage handles active-page fallback without closing the menu.
+            groupPages[key] = nil
+            for _, choice in ipairs(page.choices) do providerElements[choice.id] = nil end
+            Require(Menu:DestroyPage(menuId, page.pageId, mainPageId), 'Remove provider page')
+        end
+    end
+    -- Remove changed controls before adding any: a choice may move between groups.
+    for _, group in ipairs(groups) do
+        local page = groupPages[group.key]
+        if page then
+            local changed = #page.choices ~= #group.choices
+            for i, choice in ipairs(group.choices) do
+                local previous = page.choices[i]
+                if not previous or previous.id ~= choice.id or previous.provider ~= choice.provider then changed = true end
+            end
+            if changed then
+                for _, choice in ipairs(page.choices) do RemoveProviderElement(choice.id) end
+            end
+        end
+    end
+    for _, group in ipairs(groups) do
+        local page = groupPages[group.key]
+        if not page then
+            nextGroupId = nextGroupId + 1
+            page = { key = group.key, choices = {}, generation = epoch }
+            page.pageId = Require(Menu:CreatePage(menuId, { key = 'provider-group-' .. nextGroupId }), 'Create provider page').pageId
+            groupPages[group.key] = page
+            page.header = Add(page.pageId, 'header', { key = 'title', value = group.label, slot = 'header' })
+            page.guidance = Add(page.pageId, 'textdisplay', { key = 'guidance', value = Translate('ui_settings_guidance'), slot = 'header' })
+            page.back = Add(page.pageId, 'button', { key = 'back', label = Translate('ui_settings_back'), slot = 'footer' }, function()
+                if groupPages[page.key] ~= page or page.generation ~= epoch then return end
+                Require(Menu:NavigateToPage(menuId, mainPageId), 'Back from provider group')
+                FocusMainButton(page)
+            end)
+        end
+        UpdateElement(page.header, { value = group.label })
+        if page.button then UpdateElement(page.button, { label = group.label }) end
+        page.label = group.label
+        local changed = #page.choices ~= #group.choices
+        for i, choice in ipairs(group.choices) do
+            local previous = page.choices[i]
+            if not previous or previous.id ~= choice.id or previous.provider ~= choice.provider then changed = true end
+        end
+        if changed then
+            -- Keep page/header/Back identities; replace controls only in the changed group.
+            for _, choice in ipairs(page.choices) do
+                local reference = providerElements[choice.id]
+                if reference and reference.pageId == page.pageId then RemoveProviderElement(choice.id) end
+            end
+            for _, choice in ipairs(group.choices) do RegisterProviderElement(choice.id, choice.provider, page.pageId) end
+            page.choices = group.choices
+        else
+            for _, choice in ipairs(page.choices) do
+                UpdateElement(providerElements[choice.id], { value = ReadProviderValue(choice.provider) }, 'Sync provider')
+            end
+        end
     end
     local changed = #layout ~= #nextLayout
-    for i, value in ipairs(nextLayout) do if layout[i] ~= value then changed = true end end
+    for i, key in ipairs(nextLayout) do if layout[i] ~= key then changed = true end end
     if changed then
-        -- Contract 1 has no insertion/move operation. Replace provider content only.
-        for id in pairs(providerElements) do RemoveProviderElement(id) end
+        -- Contract 1 appends elements; reorder only the main-page navigation buttons.
         for _, reference in ipairs(groupElements) do
-            Require(Menu:RemoveElement(menuId, reference.pageId, reference.elementId), 'Remove provider heading')
+            Require(Menu:RemoveElement(menuId, reference.pageId, reference.elementId), 'Remove provider button')
         end
         groupElements = {}
-        for i, group in ipairs(groups) do
-            groupElements[#groupElements + 1] = Add(mainPageId, 'subheader', {
-                key = 'provider-group-' .. i, value = group.label,
-            })
-            for _, choice in ipairs(group.choices) do RegisterProviderElement(choice.id, choice.provider) end
+        for _, group in ipairs(groups) do
+            local page = groupPages[group.key]
+            local reference
+            reference = Add(mainPageId, 'button', { key = 'open-' .. page.pageId:match('[^/]+$'), label = page.label }, function()
+                if groupPages[page.key] ~= page or page.generation ~= epoch or page.button ~= reference then return end
+                Require(Menu:NavigateToPage(menuId, page.pageId), 'Open provider group')
+            end)
+            page.button = reference
+            groupElements[#groupElements + 1] = reference
         end
         layout = nextLayout
-    else
-        for id, reference in pairs(providerElements) do
-            UpdateElement(reference, { value = ReadProviderValue(SettingsProviders.choices[id]) }, 'Sync provider')
-        end
     end
 end
 
@@ -168,6 +235,10 @@ local function UpdateTranslatedLabels(locale)
     for name, definition in pairs(labels) do
         UpdateElement(elements[name], { [definition[1]] = Translate(definition[2]) })
     end
+    for _, page in pairs(groupPages) do
+        UpdateElement(page.back, { label = Translate('ui_settings_back') })
+        UpdateElement(page.guidance, { value = Translate('ui_settings_guidance') })
+    end
     UpdateElement(elements.pvp, { onLabel = Translate('ui_settings_enabled'), offLabel = Translate('ui_settings_disabled') })
     Require(Menu:ApplyPatch(menuId, {
         { op = 'updateElement', pageId = elements.header.pageId, elementId = elements.header.elementId,
@@ -180,7 +251,8 @@ local function UpdateTranslatedLabels(locale)
 end
 local function BuildMenu()
     epoch = epoch + 1
-    elements, providerElements, groupElements, layout = {}, {}, {}, {}
+    elements, providerElements, groupElements, layout, groupPages = {}, {}, {}, {}, {}
+    nextGroupId = 0
     menuId = Require(Menu:CreateMenu({
         key = 'main', draggable = true, closable = true, resizable = false, persistPosition = true,
         size = { width = '28rem', maxWidth = '90vw', maxHeight = '85vh', breakpoints = {
@@ -319,7 +391,7 @@ AddEventHandler('onClientResourceStop', function(stopped)
     if stopped == GetCurrentResourceName() and menuId then pcall(function() Menu:DestroyMenu(menuId) end) end
     initialized, rebuilding = false, false
     menuId, mainPageId, languagePageId = nil, nil, nil
-    elements, providerElements = {}, {}
+    elements, providerElements, groupElements, layout, groupPages = {}, {}, {}, {}, {}
 end)
 AddEventHandler('onClientResourceStart', function(started)
     if started ~= 'feather-menu-v2' then return end

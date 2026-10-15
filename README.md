@@ -44,6 +44,13 @@ group = { key = 'display', label = 'Display', order = 10 },
 order = 20,
 ```
 
+General and Character Session actions stay on the main page. Each provider group
+has one button opening its own submenu, with immediate-change guidance and a
+localized Back action. Back returns focus to the group's main-page button.
+Existing consumers require no changes. Without metadata, each owner gets one
+submenu labeled with its resource name; optional groups create separate submenus.
+The main page grows by group count rather than by individual control count.
+
 Group keys accept 1–64 identifier bytes (letters, digits, underscore, dot, colon,
 hyphen); labels accept 1–100 bytes. Orders are finite integers from -1000 to 1000,
 defaulting to zero. Groups belong to their actual registered owner; identical keys
@@ -68,9 +75,12 @@ Menu initialization tries readiness three times (3 seconds per attempt, 500ms
 between attempts), then logs failure. PGUP retries a bounded initialization cycle.
 Menu v2 start recreates at most one menu while initialization is in progress.
 Settings stop destroys its menu. Regular refreshes preserve element identities;
-layout or registration changes replace provider content only because Menu v2 has
-no insert/move operation. Built-ins and the open menu are retained. Keyboard focus
-and scroll after provider replacement still require live validation.
+layout or registration changes replace controls only in affected group pages.
+Main-page group buttons are reordered only when the group list/order changes.
+Group pages, built-ins, and the open menu are retained. Removing the active group
+returns to the main page; stale navigation/control callbacks are ignored. Menu v2
+remembers page focus/scroll where supported; behavior during structural changes
+still requires live validation.
 
 ## Validation
 
