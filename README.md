@@ -1,6 +1,44 @@
 # Feather Settings
 
+Version: **0.1.8**.
+
 Owns the player settings menu and its PGUP input. It consumes the framework-agnostic `feather-menu-v2` Contract 1 API. Locale persistence remains a minimal Core account primitive, while PVP state is provided by `feather-pvp`.
+
+## Installation and owner configuration
+
+Start Core, Menu v2, PVP, and Character before Settings; these are its declared
+dependencies. Install their prerequisites as described in their own READMEs.
+
+```cfg
+ensure feather-core
+ensure feather-menu-v2
+ensure feather-pvp
+ensure feather-character
+ensure feather-settings
+```
+
+This is a Settings dependency sequence, not a complete framework server config.
+Keep the resource name `feather-settings`. After manifest changes run `refresh`
+before restarting Settings. Stopping a hard dependency can stop Settings and other
+consumers; coordinate shared dependency restarts rather than treating them as an
+isolated Settings operation.
+
+All owner settings are in `config.lua`:
+
+| Field | Default | Purpose |
+| --- | --- | --- |
+| `Hotkey` | `0x446258B6` (PGUP) | Open/close Settings when another interface does not capture input. |
+| `DefaultLocale` | `en_us` | Fallback language when no saved locale is available. |
+| `Languages` | English, Spanish, French, Romanian | Codes and labels offered by the language page; locale translations must also be available. |
+
+Preferences apply immediately through their owning resource; there is no
+Settings-wide Save button. General and Session remain on the main page, while
+provider controls open in group submenus. Session actions save Character position
+and return to selection or disconnect through Character's commands. The PVP
+toggle controls PVP's client-local preference; it is not a server combat-policy
+or mutual-consent control. Settings itself stores no arbitrary preference values.
+
+## Provider API
 
 Feature resources can add bounded choice controls without moving preference
 ownership into Settings:
